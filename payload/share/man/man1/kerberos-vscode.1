@@ -1,0 +1,34 @@
+.\" kerberos-vscode manual page
+.TH KERBEROS-VSCODE 1 "March 2026" "kerberos-vscode 1.0.0" "User Commands"
+.SH NAME
+ kerberos-vscode \- acquire a Kerberos TGT into an isolated cache and launch Visual Studio Code
+.SH SYNOPSIS
+.B kerberos-vscode
+.SH DESCRIPTION
+\fBkerberos-vscode\fR acquires a Kerberos Ticket Granting Ticket (TGT) for the \fBkerberos.ORG\fR realm into a file-based cache and then launches Visual Studio Code so that extensions (for example, MSSQL using Windows/Integrated authentication) can use that cache via \fBKRB5CCNAME\fR.
+
+The tool may update \fI/etc/krb5.conf\fR to ensure the configured realm and KDC list match the organization configuration.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 2
+User chose to quit after KDC connectivity prompt.
+.TP
+.B 3
+No valid TGT found in the selected cache.
+.SH FILES
+.TP
+.I /usr/local/bin/kerberos-vscode
+Installed CLI tool.
+.TP
+.I /etc/krb5.conf
+Kerberos configuration file (may be modified).
+.TP
+.I /tmp/krb5cc_vscode
+Kerberos credential cache.
+.SH SEE ALSO
+.BR kinit (1),
+.BR klist (1),
+.BR krb5.conf (5)
