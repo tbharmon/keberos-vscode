@@ -1,0 +1,129 @@
+#!/bin/zsh
+# kerberos-vscode — acquire Kerberos TGT into an isolated cache, then launch VS Code (Integrated auth)
+# Requires: sudo for /etc/krb5.conf changes, network access to AD DCs (VPN/LAN).
+
+set -euo pipefail
+
+REALM="YourOrgsDomain"
+KRB5CONF="/etc/krb5.conf"
+CACHE_PATH="/tmp/krb5cc_vscode"          # file-based cache for VS Code process tree
+export KRB5CCNAME="FILE:${CACHE_PATH}"   # explicit FILE: cache type (safer/clearer)
+
+KDC_LIST=(
+  your_org_KDC_server
+)
+
+# --- helpers ---
+msg() { echo "$(date '+%F %T') | $*"; }
+need_sudo() { [[ "$(id -u)" -ne 0 ]]; }
+
+write_krb5_conf() {
+  local tmp="/tmp/krb5.conf.$$"
+  {
+    echo "[libdefaults]"
+    echo " default_realm = ${REALM}"
+    echo ""
+    echo "[realms]"
+    echo "${REALM} = {"
+    for kdc in "${KDC_LIST[@]}"; do
+      echo " kdc = ${kdc}"
+    done
+    echo "}"
+  } > "$tmp"
+
+  if need_sudo; then
+    msg "Updating ${KRB5CONF} (requires sudo)."
+    sudo cp -p "${KRB5CONF}" "${KRB5CONF}.bak.$(date '+%Y%m%d%H%M%S')" 2>/dev/null || true
+    sudo cp "$tmp" "$KRB5CONF"
+  else
+    msg "Updating ${KRB5CONF} as root."
+    cp -p "${KRB5CONF}" "${KRB5CONF}.bak.$(date '+%Y%m%d%H%M%S')" 2>/dev/null || true
+    cp "$tmp" "$KRB5CONF"
+  fi
+
+  rm -f "$tmp"
+  msg "krb5.conf written with realm ${REALM} and ${#KDC_LIST[@]} KDC entries."
+}
+
+krb5_conf_has_needed_bits() {
+  [[ -f "$KRB5CONF" ]] || return 1
+  grep -q "default_realm[[:space:]]*=[[:space:]]*${REALM}" "$KRB5CONF" || return 1
+  grep -q "^${REALM}[[:space:]]*=" "$KRB5CONF" || return 1
+  return 0
+}
+
+any_kdc_reachable_ping() {
+  for host in "${KDC_LIST[@]}"; do
+    if ping -c 1 -W 1000 "$host" >/dev/null 2>&1; then
+      echo "$host"
+      return 0
+    fi
+  done
+  return 1
+}
+
+verify_tgt() {
+  # Verify we have a TGT for the intended realm in the selected cache.
+  klist 2>/dev/null | grep -q "krbtgt/${REALM}@${REALM}"
+}
+
+launch_vscode() {
+  local codebin="/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"
+  if [[ -x "$codebin" ]]; then
+    msg "Launching VS Code with KRB5CCNAME=${KRB5CCNAME}"
+    "$codebin" >/dev/null 2>&1 & disown
+  else
+    msg "VS Code CLI not found at expected path; using 'open -a Visual Studio Code'."
+    open -a "Visual Studio Code"
+  fi
+}
+
+# --- main ---
+msg "kerberos-vscode starting (Realm=${REALM}, Cache=${KRB5CCNAME})"
+
+# 1) Ensure /etc/krb5.conf contains requested config
+if krb5_conf_has_needed_bits; then
+  msg "${KRB5CONF} already contains ${REALM} realm and default_realm."
+else
+  msg "${KRB5CONF} missing/doesn't match requested config; writing new config."
+  write_krb5_conf
+fi
+
+# 2) Connectivity check (ping any KDC)
+if reachable="$(any_kdc_reachable_ping)"; then
+  msg "KDC reachable via ping: ${reachable}"
+else
+  msg "No KDC responded to ping. On-prem Kerberos may fail without VPN."
+  echo -n "Connect VPN now, then type Y to continue (anything else to quit): "
+  read -r yn
+  [[ "$yn" == "Y" || "$yn" == "y" ]] || { msg "Exiting."; exit 2; }
+
+  if reachable="$(any_kdc_reachable_ping)"; then
+    msg "KDC reachable after user confirmation: ${reachable}"
+  else
+    msg "Still no KDC reachable. Continuing anyway, but kinit may fail."
+  fi
+fi
+
+# 3) Acquire Kerberos ticket into the isolated cache (prompts for password)
+echo -n "Enter Kerberos username (e.g., username): "
+read -r user
+msg "Running: kinit ${user}@${REALM} (will prompt for password)"
+kinit "${user}@${REALM}"   # prompts securely
+
+msg "klist (current cache):"
+klist || true
+
+if verify_tgt; then
+  msg "TGT present for ${REALM}. Good for VS Code Integrated auth."
+else
+  msg "ERROR: No TGT for ${REALM} found in cache ${KRB5CCNAME}. Cannot proceed."
+  exit 3
+fi
+
+# 4) Launch VS Code (inherits KRB5CCNAME so mssql Integrated uses this cache)
+launch_vscode
+
+msg "Done. In VS Code, connect using MSSQL extension Authentication Type = Windows Authentication."
+msg "Server-side validation: SELECT auth_scheme FROM sys.dm_exec_connections WHERE session_id = @@SPID; expect KERBEROS."
+exit 0
