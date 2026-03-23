@@ -1,0 +1,16 @@
+#!/bin/zsh
+set -euo pipefail
+
+BIN="/usr/local/bin/kerberos-vscode"
+MAN="/usr/local/share/man/man1/kerberos-vscode.1"
+
+chmod 755 "$BIN" || true
+chown root:wheel "$BIN" || true
+
+chmod 644 "$MAN" || true
+chown root:wheel "$MAN" || true
+
+# Rebuild manpage index (best-effort)
+/usr/bin/mandb >/dev/null 2>&1 || true
+
+exit 0
